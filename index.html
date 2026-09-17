@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Печка — кладка</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="vignette"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <div>
+        <h1>Печка</h1>
+        <p>Кирпич — отдельный физический объект</p>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-label">Температура</span>
+        <div class="meter heat">
+          <div class="meter-fill" id="temp-fill"></div>
+        </div>
+        <strong id="temp-value">20°</strong>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Герметичность</span>
+        <div class="meter">
+          <div class="meter-fill" id="seal-fill"></div>
+        </div>
+        <strong id="seal-value">—</strong>
+      </div>
+      <div class="stat compact">
+        <span class="stat-label">Швы</span>
+        <strong id="joint-value">0 / 0</strong>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="tool ghost" id="btn-clean" type="button">Почистить</button>
+      <button class="tool danger" id="btn-delete" type="button">Удалить печку</button>
+    </div>
+  </header>
+
+  <aside class="hint" id="hint">
+    Клади кирпичи как хочешь. Сетку можно выключить. Опилки — топливо, спичка поджигает, дым ищет трубу и щели.
+  </aside>
+
+  <aside class="catalog" id="catalog">
+    <p class="catalog-title">Готовые печки</p>
+    <button type="button" data-stove="small">Малая</button>
+    <button type="button" data-stove="russian">Русская</button>
+    <button type="button" data-stove="dutch">Голландка</button>
+    <button type="button" data-stove="potbelly">Буржуйка</button>
+  </aside>
+
+  <nav class="toolbar">
+    <button class="tool" data-tool="hand" id="tool-hand" type="button">
+      <span class="tool-icon">✋</span>
+      <span class="tool-name">Рука</span>
+      <kbd>Q</kbd>
+    </button>
+    <button class="tool active" data-tool="brick" id="tool-brick" type="button">
+      <span class="tool-icon brick-swatch"></span>
+      <span class="tool-name">Кирпич</span>
+      <kbd>1</kbd>
+    </button>
+    <button class="tool" data-tool="cement" id="tool-cement" type="button">
+      <span class="tool-icon cement-swatch"></span>
+      <span class="tool-name">Цемент</span>
+      <kbd>2</kbd>
+    </button>
+    <button class="tool" data-tool="sawdust" id="tool-sawdust" type="button">
+      <span class="tool-icon sawdust-swatch"></span>
+      <span class="tool-name">Опилки</span>
+      <kbd>3</kbd>
+    </button>
+    <button class="tool" data-tool="match" id="tool-match" type="button">
+      <span class="tool-icon match-swatch"></span>
+      <span class="tool-name">Спичка</span>
+      <kbd>4</kbd>
+    </button>
+    <button class="tool" data-tool="pipe" id="tool-pipe" type="button">
+      <span class="tool-icon pipe-swatch"></span>
+      <span class="tool-name">Труба</span>
+      <kbd>5</kbd>
+    </button>
+    <button class="tool" data-tool="prop" id="tool-prop" type="button">
+      <span class="tool-icon prop-swatch"></span>
+      <span class="tool-name">Подпорка</span>
+      <kbd>6</kbd>
+    </button>
+    <div class="toolbar-sep"></div>
+    <button class="tool ghost active" id="btn-snap" type="button">
+      <span class="tool-name" id="snap-label">Сетка</span>
+      <kbd>G</kbd>
+    </button>
+    <button class="tool ghost" id="btn-rotate" type="button">
+      <span class="tool-name">Повернуть</span>
+      <kbd>R</kbd>
+    </button>
+    <button class="tool ghost" id="btn-bond" type="button">
+      <span class="tool-name" id="bond-label">Перевязка</span>
+      <kbd>T</kbd>
+    </button>
+  </nav>
+
+  <div class="overlay" id="intro">
+    <div class="card">
+      <p class="eyebrow">мастерская</p>
+      <h2>Сложи печку и затопи её</h2>
+      <ul>
+        <li>Можно класть по кирпичу или сразу поставить готовую печку из каталога слева.</li>
+        <li>Цемент закрывает швы и приделывает трубу к кирпичу. Опилки — топливо, спичка поджигает.</li>
+        <li>Подпорка — как пять кирпичей сбоку, дерево горит. Дым тянет в трубу, через щели прёт наружу.</li>
+      </ul>
+      <button class="start" id="btn-start" type="button">К работе</button>
+    </div>
+  </div>
+
+  <script src="js/matter.min.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>

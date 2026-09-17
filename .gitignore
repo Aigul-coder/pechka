@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+*.log
+*.tmp
+
+# Godot: кэш импорта и собранный exe
+pechka_godot/.godot/
+pechka_godot/build/
+pechka_godot/tools/
+
+# старая версия на C: скачанный raylib и сборка в репозитории не нужны
+pechka3d/vendor/
+pechka3d/build/
+pechka3d/assets/

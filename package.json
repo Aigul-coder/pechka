@@ -1,0 +1,44 @@
+{
+  "name": "pechka",
+  "productName": "Печка",
+  "version": "1.0.0",
+  "description": "Игра про кладку печи",
+  "main": "electron/main.js",
+  "author": "Печка",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "local.pechka.game",
+    "productName": "Печка",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "css/**/*",
+      "js/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Pechka.exe"
+    },
+    "portable": {
+      "artifactName": "Pechka.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  }
+}
