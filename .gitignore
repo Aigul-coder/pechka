@@ -4,6 +4,9 @@ out/
 *.log
 *.tmp
 
+# архивы игры и проекта собираются локально, в репозиторий не кладём
+*.zip
+
 # Godot: кэш импорта и собранный exe
 pechka_godot/.godot/
 pechka_godot/build/

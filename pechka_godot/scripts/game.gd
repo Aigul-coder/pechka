@@ -44,7 +44,7 @@ var running_bond := true
 const TEMP_MAX := 1000.0
 const FIRE_MERGE := 0.3     # ближе этого горящие предметы считаются одним костром
 const CRACK_TEMP := 700.0   # выше этого кладка начинает рваться
-const REICH_SHOW := 5.0     # сколько держится пасхалка, прежде чем всё вернуть
+const BLAZE_SHOW := 5.0     # сколько держится пасхалка, прежде чем всё вернуть
 const DUST_FIRE := 0.32     # с такой концентрации пыли хватает искры
 
 const TIME_NAMES := PechWeather.PHASE_NAMES
@@ -74,8 +74,8 @@ var _roof_scorch := 0.0
 var _co := 0.0                  # угарный газ в сарае, 0..1
 var _co_hold := 0.0             # сколько уже дышим полной дозой
 var _temp_force := 0.0          # отладка: держать температуру на заданной
-var _reichstag := false
-var _reich_t := 0.0             # сколько ещё гореть пасхалке
+var _blaze := false
+var _blaze_t := 0.0             # сколько ещё гореть пасхалке
 var _pieces: Array[Piece] = []
 var _burning: Array[Piece] = []  # что горит сейчас, собирается один раз за кадр
 var _n_brick := 0
@@ -206,7 +206,7 @@ func _parse_cmdline() -> void:
 			_ignite_demo()
 		elif a == "--boom":
 			_ignite_demo()
-			_trigger_reichstag()
+			_trigger_blaze()
 		elif a == "--nowind":
 			_no_wind_smoke = true
 		elif a == "--nohud":
@@ -466,7 +466,7 @@ func _process(delta: float) -> void:
 	var t6 := Time.get_ticks_usec()
 	_update_room(delta)
 	_update_gas(delta)
-	_update_reich(delta)
+	_update_blaze(delta)
 	_update_weather(delta)
 	var t7 := Time.get_ticks_usec()
 	if _shot_path != "":
@@ -896,7 +896,7 @@ func _splash_at(at: Vector3) -> void:
 		stove_temp = maxf(20.0, stove_temp - 60.0 - shock * 180.0)
 		sfx.crash(at, 0.5)
 
-	if _reichstag and doused > 0:
+	if _blaze and doused > 0:
 		_douse_inferno()
 	if cracked > 0:
 		hud.toast("пар в лицо, кирпичей лопнуло: %d" % cracked)
@@ -914,7 +914,7 @@ func _douse_inferno() -> void:
 			lit += 1
 	if lit > 3:
 		return
-	_reichstag = false
+	_blaze = false
 	world.restore_roof()
 	world.set_calm()
 	fire.stop_inferno()
@@ -1210,8 +1210,8 @@ func _clear_all() -> void:
 	_flue_fire = 0.0
 	_retain = 0.0
 	fire.set_flue_fire(Vector3.ZERO, false)
-	if _reichstag:
-		_reichstag = false
+	if _blaze:
+		_blaze = false
 		world.restore_roof()
 		world.set_calm()
 		hud.hide_achievement()
@@ -1369,7 +1369,7 @@ func _update_temp(delta: float) -> void:
 	# только когда есть чем дышать
 	_coals = clampf(_coals + delta * (power * insul * _air * 0.008 - 0.012), 0.0, 1.0)
 	target = maxf(target, 20.0 + _coals * (TEMP_MAX - 20.0))
-	if _reichstag:
+	if _blaze:
 		target = TEMP_MAX   # сарай горит целиком, остывать уже нечему
 	if _temp_force > 0.0:
 		target = _temp_force
@@ -1379,8 +1379,8 @@ func _update_temp(delta: float) -> void:
 	var speed := (0.5 if power > 0.0 else 0.16) / mass
 	stove_temp = lerpf(stove_temp, maxf(target, 20.0), 1.0 - exp(-delta * speed))
 
-	if not _reichstag and stove_temp >= TEMP_MAX - 4.0:
-		_trigger_reichstag()
+	if not _blaze and stove_temp >= TEMP_MAX - 4.0:
+		_trigger_blaze()
 
 
 ## Предельная температура горящего топлива. Дерево жарче своего потолка не
@@ -1440,8 +1440,8 @@ func _headroom(space: PhysicsDirectSpaceState3D, at: Vector3) -> float:
 
 ## Пасхалка. Печка раскалилась до предела — и сарай ушёл вместе с ней:
 ## горит вся площадь, крыша встаёт обратно в своё сломанное положение.
-func _trigger_reichstag() -> void:
-	_reichstag = true
+func _trigger_blaze() -> void:
+	_blaze = true
 	sfx.crash(Vector3(0, 2.0, 0))
 	sfx.flare(Vector3(0, 0.6, 0), true)
 	world.blow_roof()
@@ -1451,8 +1451,8 @@ func _trigger_reichstag() -> void:
 		if p.is_flammable():
 			p.burning = true
 			p.heat = 1.0
-	hud.achievement("РЕЙХСТАГ 45-ГО", "%d °C — сарай взят, крышу сдуло" % roundi(TEMP_MAX))
-	_reich_t = REICH_SHOW
+	hud.achievement("ПЕКЛО", "%d °C — сарай занялся, крышу сдуло" % roundi(TEMP_MAX))
+	_blaze_t = BLAZE_SHOW
 
 
 ## Погода и игрок. Дождь мочит, мороз студит, ветер задувает в трубу,
@@ -1556,14 +1556,14 @@ func _on_gust(force: float) -> void:
 
 ## Пожар догорает сам: через несколько секунд сарай встаёт как стоял, огонь
 ## гаснет, небо светлеет — играть дальше, а не любоваться пепелищем.
-func _update_reich(delta: float) -> void:
-	if not _reichstag:
+func _update_blaze(delta: float) -> void:
+	if not _blaze:
 		return
-	_reich_t -= delta
-	if _reich_t > 0.0:
+	_blaze_t -= delta
+	if _blaze_t > 0.0:
 		return
-	_reichstag = false
-	_reich_t = 0.0
+	_blaze = false
+	_blaze_t = 0.0
 	fire.stop_inferno()
 	world.restore_roof()
 	world.set_calm()
@@ -1731,7 +1731,7 @@ func _coal_blast(at: Vector3, power: float) -> void:
 ## Перегрев рвёт кладку. Первыми уходят кирпичи, которые лежат насухо, потом
 ## сквозные швы — те, что положены без перевязки, точно один над другим.
 func _stress(delta: float) -> void:
-	if _reichstag or stove_temp < CRACK_TEMP:
+	if _blaze or stove_temp < CRACK_TEMP:
 		_crack_cd = 1.0
 		return
 	var over := clampf((stove_temp - CRACK_TEMP) / (TEMP_MAX - CRACK_TEMP), 0.0, 1.0)
@@ -1889,11 +1889,11 @@ func _update_soot(delta: float, smoke: float, tone: float) -> void:
 		var mouth := _flue_mouth()
 		fire.set_flue_fire(mouth, true)
 		sfx.set_flue(mouth, 1.0)
-		if _air > 0.5 and _flue_fire > 3.0 and not _reichstag:
+		if _air > 0.5 and _flue_fire > 3.0 and not _blaze:
 			# распахнутая заслонка кормит факел, и он достаёт до крыши
 			_roof_scorch += delta
 			if _roof_scorch > 5.0:
-				_trigger_reichstag()
+				_trigger_blaze()
 		if _soot <= 0.02 or _flue_fire <= 0.0:
 			_flue_fire = 0.0
 			_roof_scorch = 0.0
@@ -2023,7 +2023,7 @@ func _sync_fire(delta: float) -> void:
 		if host.is_empty():
 			# в общем пожаре свои огоньки у каждой доски уже не видны, а кадр
 			# они съедают, поэтому оставляем горстку и полагаемся на зарево
-			var cap: int = 3 if _reichstag else FireSystem.MAX_FIRES
+			var cap: int = 3 if _blaze else FireSystem.MAX_FIRES
 			if clusters.size() >= cap:
 				continue
 			clusters.append({
@@ -2079,7 +2079,7 @@ func _sync_fire(delta: float) -> void:
 	fire.set_room_smoke(loud_at + Vector3(0, 0.3, 0), clampf(spill * 0.4, 0.0, 1.0) if lit > 0 else 0.0)
 	# мгла копится, пока дыму некуда деваться, и медленно вытягивает через щели
 	_haze = clampf(_haze + delta * (spill * 0.17 - 0.05), 0.0, 1.0)
-	if not _reichstag:
+	if not _blaze:
 		world.set_haze(_haze)
 
 
