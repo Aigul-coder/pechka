@@ -147,7 +147,7 @@ func _build_panel_left() -> void:
 ## мелко — зачем это нужно. Больше на экране ничего не надо: длинный список
 ## задач новичка пугает ровно так же, как стена текста.
 func _build_quest() -> void:
-	_quest = _panel(Vector2(28, 288), Vector2(330, 118))
+	_quest = _panel(Vector2(28, 288), Vector2(330, 132))
 	add_child(_quest)
 	_chrome.append(_quest)
 
@@ -169,9 +169,11 @@ func _build_quest() -> void:
 	_quest.add_child(_quest_key)
 
 	_quest_hint = _label("", 14, DIM, _font)
-	_quest_hint.position = Vector2(18, 86)
-	_quest_hint.size = Vector2(296, 20)
-	_quest_hint.clip_text = true
+	_quest_hint.position = Vector2(18, 84)
+	_quest_hint.size = Vector2(296, 40)
+	# подсказка переносится по словам: обрезать её на полуслове хуже, чем
+	# занять вторую строку
+	_quest_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_quest.add_child(_quest_hint)
 	_quest.visible = false
 
