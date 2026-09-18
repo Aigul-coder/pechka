@@ -1,3 +1,4 @@
+class_name PechGame
 extends Node3D
 
 ## Печка 3D. Кладём кирпич на фундамент, мажем цементом, ставим трубу,
@@ -33,6 +34,13 @@ var _seams_dirty := false
 var ghost: MeshInstance3D
 var ghost_mat: StandardMaterial3D
 var marker: MeshInstance3D
+var tutor: Tutor
+var pointer: MeshInstance3D      ## колечко в мире: куда смотреть по шагу обучения
+var blueprint: MultiMeshInstance3D   ## призрачный чертёж правильной печки
+var _plan_on := false
+var _plan_cd := 0.0
+var _plan_left := 0
+var _plan_total := 0
 var _ghost_meshes: Dictionary = {}
 var _probe_shape: BoxShape3D
 var _probe_params: PhysicsShapeQueryParameters3D
@@ -76,6 +84,10 @@ var _co_hold := 0.0             # сколько уже дышим полной 
 var _temp_force := 0.0          # отладка: держать температуру на заданной
 var _blaze := false
 var _blaze_t := 0.0             # сколько ещё гореть пасхалке
+var _press := 0.0               # давление под закрытой заслонкой, 0..1
+var _slowmo := 0.0              # сколько ещё держать замедление времени
+var _rocket_cd := 0.0           # пауза, чтобы труба не улетала дважды подряд
+var _roof_back := 0.0           # через сколько вернуть сорванную крышу
 var _pieces: Array[Piece] = []
 var _burning: Array[Piece] = []  # что горит сейчас, собирается один раз за кадр
 var _n_brick := 0
@@ -113,6 +125,10 @@ var _chill := 0.0               # насколько замёрз, 0..1
 var _froze := false
 var _ach: Dictionary = {}       # выданные достижения
 var _last100: Array[float] = []
+var _auto_quality := true       # сама сбавит качество, если кадры просели
+var _tutor_step := -1           # отладка: показать обучение на нужном шаге
+var _slow_t := 0.0
+var _fast_t := 0.0
 var _shot_path := ""
 var _shot_frames := 150
 var _frame := 0
@@ -173,10 +189,18 @@ func _ready() -> void:
 	world.sky.rainbow_out.connect(func() -> void: _award("beauty", "КРАСОТА", "радуга над сараем"))
 
 	_make_ghost()
+	_make_pointer()
+	_make_blueprint()
 	# стартовую расстановку собираем молча, иначе игра начинается с грохота
 	sfx.muted = true
 	_build_demo_stove()
 	sfx.muted = false
+
+	tutor = Tutor.create(self)
+	add_child(tutor)
+	tutor.step_done.connect(_on_step_done)
+	tutor.finished.connect(_on_tutor_done)
+
 	_parse_cmdline()
 	_set_mode(mode)
 	hud.hide_toast()
@@ -255,7 +279,51 @@ func _parse_cmdline() -> void:
 			_coal_dust = 0.85
 			_settle = 0.0
 		elif a.begins_with("--quality="):
-			world.set_quality(int(a.substr(10)))
+			_set_quality(int(a.substr(10)))
+			_auto_quality = false
+		elif a == "--noauto":
+			_auto_quality = false
+		elif a.begins_with("--tutor="):
+			_tutor_step = int(a.substr(8))
+		elif a == "--plan":
+			# показать чертёж на пустом фундаменте
+			_clear_all()
+			_toggle_blueprint()
+			_update_blueprint(1.0)
+		elif a.begins_with("--plan-part="):
+			# сложить часть печки по чертежу: видно и кладку, и что осталось
+			_clear_all()
+			var share := clampf(float(a.substr(12)), 0.0, 1.0)
+			var plan := _stove_plan()
+			for i in plan.size():
+				if float(i) / float(plan.size()) < share:
+					_lay_brick(plan[i]["pos"], plan[i]["rot"], plan[i]["bed"])
+			_toggle_blueprint()
+			_rebuild_bins()
+			_update_blueprint(1.0)
+		elif a == "--rocket":
+			# показать запуск: печь уже раскалена, заслонка закрыта
+			_ignite_demo()
+			_temp_force = 900.0
+			stove_temp = 900.0
+			damper = 0
+			_press = 0.92
+			_settle = 0.0
+		elif a.begins_with("--off="):
+			# отладка скорости: выключить эффекты по именам через запятую
+			for name in a.substr(6).split(","):
+				match name:
+					"sdfgi": world.env.sdfgi_enabled = false
+					"vol": world.env.volumetric_fog_enabled = false
+					"ssil": world.env.ssil_enabled = false
+					"ssao": world.env.ssao_enabled = false
+					"glow": world.env.glow_enabled = false
+					"shadow": world.sun.shadow_enabled = false
+					"fire": fire.debug_off("fire")
+					"smoke": fire.debug_off("smoke")
+					"firelight": fire.debug_off("light")
+					"rain": world.sky.debug_off()
+					"prox": FireSystem._smoke_mat().proximity_fade_enabled = false
 		elif a.begins_with("--weather="):
 			world.set_weather(int(a.substr(10)))
 		elif a.begins_with("--soot="):
@@ -285,6 +353,12 @@ func _parse_cmdline() -> void:
 			_light_bonfire()
 	if _shot_path != "":
 		hud.hide_intro()
+		_auto_quality = false   # замер должен показывать выбранный режим, а не подстроенный
+		tutor.active = false
+	if _tutor_step >= 0:
+		# для снимков обучения: показать нужный шаг, не проходя игру заново
+		tutor.active = true
+		tutor.step = clampi(_tutor_step, 0, tutor.total() - 1)
 
 
 # ---------------------------------------------------------------- ввод
@@ -366,6 +440,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				hud.toast("кирпич: %s" % FRAC_NAMES[frac_idx])
 			KEY_R:
 				rotated = not rotated
+			KEY_G:
+				_toggle_blueprint()
 			KEY_B:
 				running_bond = not running_bond
 				hud.toast("перевязка включена" if running_bond else "кладём в стык")
@@ -393,14 +469,25 @@ func _unhandled_input(event: InputEvent) -> void:
 				_remove_under_cursor()
 			KEY_C:
 				_clear_all()
+				# снёс всё — значит, будет строить сам: показываем чертёж
+				if not _plan_on:
+					_toggle_blueprint()
 			KEY_F1:
 				hud.toggle_hints()
+			KEY_F4:
+				tutor.active = not tutor.active
+				if not tutor.active:
+					hud.quest_hide()
+					pointer.visible = false
+				hud.toast("обучение включено" if tutor.active else "обучение выключено")
 			KEY_F2:
 				_set_mode(Mode.ORBIT if mode == Mode.FLY else Mode.FLY)
 			KEY_TAB:
 				_set_mode(Mode.ORBIT if mode == Mode.WALK else Mode.WALK)
 			KEY_F3:
-				world.next_quality()
+				# руками выбрали — значит, автоподстройка больше не лезет
+				_auto_quality = false
+				_set_quality((world.quality + 1) % PechWorld.QUALITY_NAMES.size())
 				hud.toast("качество картинки: %s" % world.quality_name())
 			KEY_F5:
 				_save_game()
@@ -415,9 +502,178 @@ func _unhandled_input(event: InputEvent) -> void:
 					get_tree().quit()
 
 
+## Мягкое колечко, которое висит над тем местом, куда сейчас надо смотреть.
+## Стрелки и всплывающие окна в такой игре смотрятся чужеродно, а свечение
+## над топкой читается сразу и ничего не загораживает.
+func _make_pointer() -> void:
+	var m := TorusMesh.new()
+	m.inner_radius = 0.14
+	m.outer_radius = 0.19
+	m.rings = 24
+	m.ring_segments = 8
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(1.0, 0.78, 0.35, 0.55)
+	mat.no_depth_test = true
+	mat.render_priority = 5
+	pointer = MeshInstance3D.new()
+	pointer.name = "Pointer"
+	pointer.mesh = m
+	pointer.material_override = mat
+	pointer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pointer.visible = false
+	add_child(pointer)
+
+
+## ЧЕРТЁЖ. Сложить настоящую печь с перевязкой, сводом и трубой — задача,
+## перед которой новичок просто опускает руки. Поэтому по клавише G в
+## воздухе проступает призрачный план: каждый недостающий кирпич стоит на
+## своём месте, остаётся класть по нему. Это не автосборка — кирпичи всё
+## равно надо принести, повернуть и промазать цементом, но теперь видно,
+## куда именно.
+func _make_blueprint() -> void:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var box := BoxMesh.new()
+	# чуть меньше настоящего: между призраками остаются щели, и видно, что
+	# это отдельные кирпичи, а не синий куб
+	box.size = Piece.BRICK_SIZE * 0.88
+	mm.mesh = box
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.45, 0.82, 1.0, 0.34)
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+
+	blueprint = MultiMeshInstance3D.new()
+	blueprint.name = "Blueprint"
+	blueprint.multimesh = mm
+	blueprint.material_override = mat
+	blueprint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	blueprint.visible = false
+	add_child(blueprint)
+
+
+func _toggle_blueprint() -> void:
+	_plan_on = not _plan_on
+	blueprint.visible = _plan_on
+	_plan_cd = 0.0
+	if _plan_on:
+		hud.toast("чертёж включён: синие кирпичи — куда класть дальше")
+	else:
+		hud.toast("чертёж выключен")
+
+
+## Пересобирать план каждый кадр незачем: кладут его не быстрее кирпича в
+## секунду.
+func _update_blueprint(delta: float) -> void:
+	if not _plan_on:
+		return
+	_plan_cd -= delta
+	if _plan_cd > 0.0:
+		return
+	_plan_cd = 0.4
+	var plan := _stove_plan()
+	var left: Array[Dictionary] = []
+	var low := INF
+	for e in plan:
+		var pos: Vector3 = e["pos"]
+		if _brick_at(pos):
+			continue
+		left.append(e)
+		low = minf(low, pos.y)
+
+	# Показываем не весь план, а только нижний незаконченный ряд. Кладка
+	# идёт снизу вверх, и двадцать призраков на своих местах читаются как
+	# «положи сюда», тогда как весь чертёж сразу — как синяя глыба.
+	var rows: Array[Transform3D] = []
+	for e2 in left:
+		var p: Vector3 = e2["pos"]
+		if p.y < low + CELL.y * 0.6:
+			rows.append(Transform3D(e2["rot"] as Basis, p))
+	var mm := blueprint.multimesh
+	mm.instance_count = rows.size()
+	for i in rows.size():
+		mm.set_instance_transform(i, rows[i])
+	_plan_left = left.size()
+	_plan_total = plan.size()
+
+
+## Лежит ли на этом месте кирпич. Соседей берём из той же решётки, что и
+## огонь, — второй раз обходить все предметы ни к чему.
+func _brick_at(pos: Vector3) -> bool:
+	for q in _neighbors(pos):
+		if q.kind == Piece.Kind.BRICK and q.global_position.distance_to(pos) < 0.07:
+			return true
+	return false
+
+
+func _on_step_done(_index: int) -> void:
+	hud.quest_done()
+	sfx.clack(cam_target, 0.25)
+
+
+func _on_tutor_done() -> void:
+	hud.set_quest({}, 0, 0)
+	pointer.visible = false
+	_award("warm", "ПЕЧНИК", "в сарае тепло — дальше топи и строй как хочешь")
+
+
+## Обучение ведёт игрока за руку, но никогда не перехватывает управление:
+## панель просто показывает следующий шаг, а колечко — куда смотреть.
+func _update_tutor(delta: float) -> void:
+	if tutor == null:
+		return
+	tutor.update(delta)
+	var cur := tutor.current()
+	hud.set_quest(cur, tutor.step, tutor.total())
+	if cur.is_empty() or not cur.has("at"):
+		pointer.visible = false
+		return
+	var at: Vector3 = cur["at"]
+	if at == Vector3.ZERO:
+		pointer.visible = false
+		return
+	pointer.visible = true
+	pointer.position = at + Vector3(0, 0.34 + sin(_frame * 0.045) * 0.035, 0)
+	pointer.rotation.y += delta * 0.9
+
+
 func _set_tool(t: Tool) -> void:
 	tool = t
 	hud.set_tool(tool)
+
+
+## Качество картинки одной ручкой: мир и огонь настраиваются вместе, иначе
+## тени от пламени остаются дорогими даже на низком.
+func _set_quality(q: int) -> void:
+	world.set_quality(q)
+	fire.set_quality(world.fx_level())
+
+
+## Если кадры просели надолго — сами убавляем качество. Игрок не должен
+## лезть в настройки, чтобы игра перестала тормозить; обратно не поднимаем,
+## иначе на границе начнётся мигание туда-сюда.
+func _update_quality(delta: float) -> void:
+	if not _auto_quality or world.quality >= PechWorld.QUALITY_NAMES.size() - 1:
+		return
+	var fps := Engine.get_frames_per_second()
+	if fps < 48.0:
+		_slow_t += delta
+		_fast_t = 0.0
+	else:
+		_fast_t += delta
+		if _fast_t > 1.5:
+			_slow_t = 0.0
+	if _slow_t < 3.0:
+		return
+	_slow_t = 0.0
+	_set_quality(world.quality + 1)
+	hud.toast("кадры просели — качество снижено до «%s», F3 переключает вручную"
+		% world.quality_name())
 
 
 func _set_mode(m: Mode) -> void:
@@ -468,6 +724,10 @@ func _process(delta: float) -> void:
 	_update_gas(delta)
 	_update_blaze(delta)
 	_update_weather(delta)
+	_update_rocket(delta)
+	_update_blueprint(delta)
+	_update_tutor(delta)
+	_update_quality(delta)
 	var t7 := Time.get_ticks_usec()
 	if _shot_path != "":
 		_prof[0] += t1 - t0
@@ -487,8 +747,9 @@ func _process(delta: float) -> void:
 	if _hud_cd <= 0.0:
 		# цифры в панели меняются медленно, обновлять их каждый кадр незачем
 		_hud_cd = 0.1
-		hud.update_stats(stove_temp, _n_brick, _n_cemented, _n_burning, rotated, running_bond)
-		hud.update_air(_air, DAMPER_NAMES[damper], _haze, _coal_dust)
+		hud.update_stats(stove_temp, _n_brick, _n_cemented, _n_burning, rotated, running_bond,
+			_plan_left if _plan_on else -1, _plan_total)
+		hud.update_air(_air, DAMPER_NAMES[damper], _haze, _coal_dust, _press)
 		hud.update_room(room_temp, world.outside_temp(), world.sky.kind_name(), _warm_done)
 		hud.update_sky(world.sky)
 		hud.update_flue(_soot, _co, _flue_fire > 0.0, _retain)
@@ -1455,6 +1716,95 @@ func _trigger_blaze() -> void:
 	_blaze_t = BLAZE_SHOW
 
 
+## ПЕЧКА-РАКЕТА. Закрытая заслонка на раскалённой печи — грубейшая ошибка
+## печника: пару и газам некуда деться. В жизни это кончается треснувшей
+## кладкой, у нас — трубой, которая уходит в небо со свистом, а сарай
+## провожает её взглядом. Механика честная (перекрыл выход — растёт
+## давление) и при этом мгновенно понятная со стороны: любой, кто увидит
+## ролик, поймёт, что произошло, и захочет повторить.
+func _update_rocket(delta: float) -> void:
+	_rocket_cd = maxf(0.0, _rocket_cd - delta)
+	if _roof_back > 0.0:
+		_roof_back -= delta
+		if _roof_back <= 0.0 and not _blaze:
+			world.restore_roof()
+			for p in _pieces:
+				if p.kind == Piece.Kind.PIPE:
+					p.collision_mask = Piece.LAYER_WORLD | Piece.LAYER_SOLID
+					p.gravity_scale = 1.0
+	if _slowmo > 0.0:
+		_slowmo = maxf(0.0, _slowmo - delta / maxf(Engine.time_scale, 0.05))
+		if _slowmo <= 0.0:
+			Engine.time_scale = 1.0
+
+	var pipes := _count(Piece.Kind.PIPE)
+	var sealed := damper == 0 and pipes > 0 and _rocket_cd <= 0.0
+	if sealed and stove_temp > 420.0:
+		# чем жарче в топке, тем быстрее набирается: от минуты на 420 °C
+		# до пары секунд у предела
+		_press = clampf(_press + delta * (0.012 + pow((stove_temp - 420.0) / 580.0, 1.7) * 0.42),
+			0.0, 1.0)
+	else:
+		_press = maxf(0.0, _press - delta * 0.35)
+	sfx.set_pressure(_flue_mouth(), _press)
+	if _press >= 1.0:
+		_launch_rocket()
+
+
+func _launch_rocket() -> void:
+	_press = 0.0
+	_rocket_cd = 8.0
+	damper = 2                      # сорвало вместе с трубой
+	var base := _flue_mouth()
+
+	# труба уходит первой и целиком, звеньями по очереди: так читается,
+	# что это именно она, а не случайный мусор
+	# крышу срывает тем же ударом: иначе труба упрётся в кровлю изнутри и
+	# весь номер пропадёт
+	world.blow_roof()
+	_roof_back = 7.0
+
+	var n := 0
+	for p in _pieces:
+		if p.kind != Piece.Kind.PIPE:
+			continue
+		p.unfreeze()
+		p.collision_layer = Piece.LAYER_DEBRIS
+		p.collision_mask = 0          # на взлёте труба ни за что не цепляется
+		# скорость задаём прямо: импульс делился бы на массу звена, и вместо
+		# ракеты получался бы подпрыгнувший кирпич
+		p.linear_velocity = Vector3(
+			randf_range(-0.7, 0.7), 21.0 - float(n) * 1.4, randf_range(-0.7, 0.7))
+		p.angular_velocity = Vector3(randf_range(-4, 4), randf_range(-9, 9), randf_range(-4, 4))
+		p.gravity_scale = 0.35        # первые секунды тяга держит трубу в небе
+		fire.attach_trail(p)
+		n += 1
+
+	# верхний ряд кладки подбрасывает следом — печка выдыхает
+	for p2 in _pieces:
+		if p2.kind != Piece.Kind.BRICK or p2.global_position.y < base.y - 0.22:
+			continue
+		if randf() > 0.55:
+			continue
+		p2.unfreeze()
+		p2.linear_velocity = Vector3(randf_range(-2.2, 2.2), randf_range(3.5, 6.5),
+			randf_range(-2.2, 2.2))
+		p2.angular_velocity = Vector3(randf_range(-6, 6), randf_range(-6, 6), randf_range(-6, 6))
+
+	fire.blast(base, 1.5)
+	fire.steam_burst(base + Vector3(0, 0.3, 0), 1.6)
+	sfx.crash(base, 1.0)
+	sfx.flare(base, true)
+	sfx.set_pressure(base, 0.0)
+	stove_temp = maxf(120.0, stove_temp - 240.0)
+
+	# замедление на полторы секунды: взгляд успевает поймать трубу в полёте
+	Engine.time_scale = 0.35
+	_slowmo = 1.5
+	hud.toast("труба ушла в небо — заслонку нельзя держать закрытой на жару")
+	_award("rocket", "КОСМОНАВТ", "печка запустила трубу в стратосферу")
+
+
 ## Погода и игрок. Дождь мочит, мороз студит, ветер задувает в трубу,
 ## а звук снаружи зависит от того, стоит ли игрок под крышей.
 func _update_weather(delta: float) -> void:
@@ -2213,22 +2563,29 @@ func _save_shot() -> void:
 ## Ставим уже сложенную топку. Кладка — настоящая перевязка: чётные слои
 ## длинными стенками держат углы, нечётные — короткими, поэтому вертикальные
 ## швы сдвинуты на полкирпича, как в живой кладке.
-func _build_demo_stove() -> void:
+## Чертёж правильной печки: где должен лежать каждый кирпич. Из этого же
+## списка собирается стартовая печка и рисуется призрачный план для того,
+## кто снёс всё и хочет сложить свою. Держать план и кладку в одном месте
+## важно: иначе чертёж однажды разойдётся с тем, что игра считает верным.
+const PLAN_LAYERS := 9
+const PLAN_LONG := 5
+const PLAN_SHORT := 4
+
+
+func _stove_plan() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
 	var bt := Piece.BRICK_SIZE.z      # толщина стенки
 	var pitch := CELL.x               # шаг с учётом шва
-	var n_long := 5
-	var n_short := 4
-	var layers := 9
-	var half_l := n_long * pitch * 0.5
-	var half_s := n_short * pitch * 0.5
+	var half_l := PLAN_LONG * pitch * 0.5
+	var half_s := PLAN_SHORT * pitch * 0.5
 	var turn := Basis.from_euler(Vector3(0, PI * 0.5, 0))
 
-	for layer in layers:
+	for layer in PLAN_LAYERS:
 		var y := BASE_Y + layer * CELL.y + Piece.BRICK_SIZE.y * 0.5
 		var long_owns_corner := layer % 2 == 0
 
 		# длинные стенки вдоль X, спереди и сзади
-		var lc := n_long if long_owns_corner else n_long - 1
+		var lc := PLAN_LONG if long_owns_corner else PLAN_LONG - 1
 		for sz in [-1.0, 1.0]:
 			var z: float = sz * (half_s - bt * 0.5)
 			for i in lc:
@@ -2236,28 +2593,45 @@ func _build_demo_stove() -> void:
 				# устье топки в передней стенке
 				if sz > 0.0 and layer >= 1 and layer <= 3 and absf(x) < 0.33:
 					continue
-				_lay_brick(Vector3(x, y, z), Basis.IDENTITY, true)
+				out.append({"pos": Vector3(x, y, z), "rot": Basis.IDENTITY, "bed": true})
 
 		# короткие стенки вдоль Z, слева и справа
-		var sc := n_short if not long_owns_corner else n_short - 1
+		var sc := PLAN_SHORT if not long_owns_corner else PLAN_SHORT - 1
 		for sx in [-1.0, 1.0]:
 			var x2: float = sx * (half_l - bt * 0.5)
 			for j in sc:
 				var z2 := -(sc - 1) * pitch * 0.5 + j * pitch
-				_lay_brick(Vector3(x2, y, z2), turn, true)
+				out.append({"pos": Vector3(x2, y, z2), "rot": turn, "bed": true})
 
 	# плита сверху, в ней отверстие под трубу
-	var flue := Vector3(pitch, 0, -pitch * 1.0)
-	var slab_y := BASE_Y + layers * CELL.y + Piece.BRICK_SIZE.y * 0.5
-	var cols := n_long
+	var flue := plan_flue()
+	var slab_y := plan_slab_y()
 	var rows := int((half_s * 2.0) / CELL.z)
-	for c in cols:
+	for c in PLAN_LONG:
 		for r in rows:
-			var x3 := -(cols - 1) * pitch * 0.5 + c * pitch
+			var x3 := -(PLAN_LONG - 1) * pitch * 0.5 + c * pitch
 			var z3 := -(rows - 1) * CELL.z * 0.5 + r * CELL.z
 			if absf(x3 - flue.x) < 0.2 and absf(z3 - flue.z) < 0.22:
 				continue
-			_lay_brick(Vector3(x3, slab_y, z3), Basis.IDENTITY, false)
+			out.append({"pos": Vector3(x3, slab_y, z3), "rot": Basis.IDENTITY, "bed": false})
+	return out
+
+
+func plan_flue() -> Vector3:
+	return Vector3(CELL.x, 0, -CELL.x)
+
+
+func plan_slab_y() -> float:
+	return BASE_Y + PLAN_LAYERS * CELL.y + Piece.BRICK_SIZE.y * 0.5
+
+
+func _build_demo_stove() -> void:
+	var pitch := CELL.x
+	for e in _stove_plan():
+		_lay_brick(e["pos"], e["rot"], e["bed"])
+
+	var flue := plan_flue()
+	var slab_y := plan_slab_y()
 
 	# труба из двух звеньев над отверстием
 	for i in 2:
@@ -2289,19 +2663,9 @@ func _build_demo_stove() -> void:
 	add_child(bucket)
 	bucket.global_position = Vector3(3.6, Bucket.H * 0.5 + 0.02, -1.95)
 
-	# дрова и опилки в топке
-	var fb := Vector3(0, BASE_Y + 0.02, 0.05)
-	for i in 2:
-		var log_piece := Piece.create(Piece.Kind.PROP)
-		pieces_root.add_child(log_piece)
-		log_piece.global_transform = Transform3D(
-			Basis.from_euler(Vector3(0, randf_range(-0.35, 0.35), PI * 0.5)),
-			fb + Vector3(0, Piece.PROP_R + i * 0.1, -0.06 + i * 0.12)
-		)
-		_pieces.append(log_piece)
-	_pour_dust(fb + Vector3(0, 0.06, 0))
-	_pour_hay(fb + Vector3(0, 0.2, 0.04), 4)
-	_pour_chips(fb + Vector3(-0.05, 0.3, -0.02), 7)
+	# Топку оставляем пустой: растопить печь своими руками — это и есть
+	# первое, чему учит игра. Готовая поленница внутри лишила бы новичка
+	# самого понятного действия.
 
 	# запасы топлива в сарае — настоящими предметами: их можно расшвырять,
 	# перетаскать в топку и сжечь
@@ -2355,10 +2719,28 @@ func _light_bonfire() -> void:
 		_pieces.append(log_piece)
 
 
+## Набить топку: опилки на под, сверху трава и щепки, поверх два полена.
+## Нужна для отладочных запусков и для тех, кому не до растопки.
+func _fill_firebox() -> void:
+	var fb := Vector3(0, BASE_Y + 0.02, 0.05)
+	for i in 2:
+		var log_piece := Piece.create(Piece.Kind.PROP)
+		pieces_root.add_child(log_piece)
+		log_piece.global_transform = Transform3D(
+			Basis.from_euler(Vector3(0, randf_range(-0.35, 0.35), PI * 0.5)),
+			fb + Vector3(0, Piece.PROP_R + i * 0.1, -0.06 + i * 0.12)
+		)
+		_pieces.append(log_piece)
+	_pour_dust(fb + Vector3(0, 0.06, 0))
+	_pour_hay(fb + Vector3(0, 0.2, 0.04), 4)
+	_pour_chips(fb + Vector3(-0.05, 0.3, -0.02), 7)
+
+
 func _ignite_demo() -> void:
+	_fill_firebox()
 	for kind in [Piece.Kind.HAY, Piece.Kind.DUST]:
 		for p in _pieces:
-			if p.kind == kind:
+			if p.kind == kind and Vector2(p.global_position.x, p.global_position.z).length() < 0.5:
 				p.burning = true
 				p.heat = 1.0
 				return

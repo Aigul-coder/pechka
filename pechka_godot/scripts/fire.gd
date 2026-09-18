@@ -31,6 +31,9 @@ var _noise: FastNoiseLite
 var _t := 0.0
 var _active := 0
 var _tones: Array[float] = []
+var _quality := 0
+var _max_on := MAX_FIRES
+var _dense := 1.0           # общая поправка к плотности частиц
 
 
 func _ready() -> void:
@@ -58,12 +61,15 @@ func _ready() -> void:
 		l.light_specular = 0.6
 		l.omni_range = 5.0
 		l.omni_attenuation = 2.0
-		l.shadow_enabled = i < 3
 		l.shadow_bias = 0.05
 		l.shadow_normal_bias = 1.2
-		# в объёмный туман светят только два первых огня: каждый источник
-		# там стоит отдельного прохода по сетке, а зарево от них одинаковое
-		l.light_volumetric_fog_energy = 2.4 if i < 2 else 0.0
+		# огонь мерцает, и глобальное освещение честно пересчитывает от него
+		# отражённый свет каждый кадр. Стоит это половины кадра, а видно
+		# только дрожь в углах, поэтому в расчёт переотражений огонь не берём.
+		l.light_bake_mode = Light3D.BAKE_DISABLED
+		# кубическая тень от точечного света — это шесть проходов по сцене на
+		# каждый огонёк; параболоид рисует то же самое за два
+		l.omni_shadow_mode = OmniLight3D.SHADOW_DUAL_PARABOLOID
 		l.visible = false
 		add_child(l)
 		_lights.append(l)
@@ -76,6 +82,104 @@ func _ready() -> void:
 	_chimney.lifetime = 4.8
 	_chimney.emitting = false
 	add_child(_chimney)
+	set_quality(_quality)
+
+
+## Цена огня складывается из трёх вещей: теней от живых источников, шума
+## завихрений в шейдере частиц и числа самих частиц. На среднем и низком
+## режем всё три, на высоком оставляем как было.
+func set_quality(q: int) -> void:
+	_quality = clampi(q, 0, 2)
+	var shadows: int = [2, 1, 0][_quality]
+	var fog: int = [2, 0, 0][_quality]
+	_max_on = [MAX_FIRES, 8, 5][_quality]
+	_dense = [1.0, 0.8, 0.55][_quality]
+	for i in MAX_FIRES:
+		_lights[i].shadow_enabled = i < shadows
+		# каждый источник в объёмном тумане — отдельный проход по сетке
+		_lights[i].light_volumetric_fog_energy = 2.4 if i < fog else 0.0
+		# завихрения дороги, но без них дым идёт ровным столбом: оставляем
+		# их пламени, у которого форма и читается, а дыму и искрам гасим
+		_turbulence(_smokes[i], _quality == 0)
+		_turbulence(_sparks[i], _quality < 2)
+	if _chimney:
+		_turbulence(_chimney, _quality == 0)
+	# мягкое врезание дыма в кладку требует чтения глубины на каждый пиксель:
+	# на высоком это того стоит, ниже — нет
+	_smoke_mat().proximity_fade_enabled = _quality == 0
+
+
+## Ракетный след: из улетающей трубы бьёт вниз пламя и остаётся столб дыма.
+## Частицы живут в мировых координатах, поэтому за трубой тянется хвост, а
+## не едет вместе с ней облачко.
+func attach_trail(target: Node3D, life := 5.0) -> void:
+	var f := _make_flame()
+	f.amount = 170
+	f.lifetime = 0.8
+	f.local_coords = false
+	f.visibility_aabb = AABB(Vector3(-6, -40, -6), Vector3(12, 80, 12))
+	var fpm := f.process_material as ParticleProcessMaterial
+	fpm.direction = Vector3(0, -1, 0)
+	fpm.spread = 11.0
+	fpm.initial_velocity_min = 3.5
+	fpm.initial_velocity_max = 8.0
+	fpm.gravity = Vector3(0, -1.5, 0)
+	fpm.scale_min = 0.09
+	fpm.scale_max = 0.26
+	f.emitting = true
+	target.add_child(f)
+
+	var sm := _make_smoke(1.1)
+	sm.amount = 200
+	sm.amount_ratio = 1.0
+	sm.lifetime = 2.8
+	sm.preprocess = 0.0
+	sm.local_coords = false
+	sm.visibility_aabb = AABB(Vector3(-8, -40, -8), Vector3(16, 80, 16))
+	var spm := sm.process_material as ParticleProcessMaterial
+	spm.direction = Vector3(0, -1, 0)
+	spm.spread = 16.0
+	spm.initial_velocity_min = 1.2
+	spm.initial_velocity_max = 3.4
+	spm.gravity = Vector3(0, 0.2, 0)
+	spm.scale_min = 0.28
+	spm.scale_max = 0.62
+	# белый след виден и против яркого неба, серый дым там теряется
+	spm.color_ramp = _steam_ramp()
+	sm.emitting = true
+	target.add_child(sm)
+
+	# хвост гаснет сам: дальше трубе лететь уже некуда
+	var t := get_tree().create_timer(life)
+	t.timeout.connect(func() -> void:
+		if is_instance_valid(f):
+			f.emitting = false
+			f.queue_free()
+		if is_instance_valid(sm):
+			sm.emitting = false
+			sm.queue_free())
+
+
+## Отладка скорости: спрятать часть огня и посмотреть, что стоит кадров.
+func debug_off(what: String) -> void:
+	for i in MAX_FIRES:
+		match what:
+			"fire":
+				_flames[i].visible = false
+				_sparks[i].visible = false
+			"smoke":
+				_smokes[i].visible = false
+			"light":
+				_lights[i].light_energy = 0.0
+				_lights[i].shadow_enabled = false
+	if what == "smoke" and _chimney:
+		_chimney.visible = false
+
+
+func _turbulence(p: GPUParticles3D, on: bool) -> void:
+	var pm := p.process_material as ParticleProcessMaterial
+	if pm:
+		pm.turbulence_enabled = on
 
 
 ## Расставить огонь по горящим предметам. Каждый очаг описывается словарём:
@@ -85,7 +189,7 @@ func _ready() -> void:
 ##   flame  — яркость пламени, smoke — густота дыма
 ##   tone   — 0 тёмно-серый дым от дерева, 1 светло-серый от опилок
 func set_fires(fires: Array) -> void:
-	_active = mini(fires.size(), MAX_FIRES)
+	_active = mini(fires.size(), _max_on)
 	# Десяток очагов рядом — это всё равно один костёр, а не десять солнц:
 	# гасим вклад каждого, иначе свет и аддитивное пламя выжигают кадр.
 	var norm := 1.0 / sqrt(maxf(1.0, float(_active)))
@@ -116,9 +220,9 @@ func set_fires(fires: Array) -> void:
 		_lights[i].position = pos + Vector3(0, h * 0.6, 0)
 
 		# дым не должен тонуть в пламени, поэтому его нижний порог высокий
-		_smokes[i].amount_ratio = clampf(sm * (0.55 + 0.45 * dense), 0.1, 1.0)
-		_flames[i].amount_ratio = clampf(fl * dense, 0.08, 1.0)
-		_sparks[i].amount_ratio = clampf(fl * dense * 0.7, 0.05, 1.0)
+		_smokes[i].amount_ratio = clampf(sm * (0.55 + 0.45 * dense) * _dense, 0.1, 1.0)
+		_flames[i].amount_ratio = clampf(fl * dense * _dense, 0.08, 1.0)
+		_sparks[i].amount_ratio = clampf(fl * dense * 0.7 * _dense, 0.05, 1.0)
 		_energy[i] = 2.0 * fl * norm
 		_set_smoke_tone(i, f.get("tone", 0.0))
 
@@ -200,6 +304,7 @@ func blast(pos: Vector3, power: float) -> void:
 		_blast_light.light_color = Color(1.0, 0.72, 0.36)
 		_blast_light.omni_range = 14.0
 		_blast_light.shadow_enabled = false
+		_blast_light.light_bake_mode = Light3D.BAKE_DISABLED
 		_blast_light.visible = false
 		add_child(_blast_light)
 
@@ -236,6 +341,7 @@ func set_flue_fire(pos: Vector3, on: bool) -> void:
 		_torch_light.omni_range = 9.0
 		_torch_light.light_energy = 4.0
 		_torch_light.shadow_enabled = false
+		_torch_light.light_bake_mode = Light3D.BAKE_DISABLED
 		add_child(_torch_light)
 	_torch.emitting = on
 	_torch_light.visible = on
@@ -329,7 +435,7 @@ func start_inferno(hx: float, hz: float, y: float) -> void:
 			)
 			var f := _make_flame()
 			f.amount = 90
-			f.amount_ratio = 1.0
+			f.amount_ratio = _dense
 			f.lifetime = 1.5
 			f.visibility_aabb = AABB(Vector3(-4, -0.5, -4), Vector3(8, 12, 8))
 			var fpm := f.process_material as ParticleProcessMaterial
@@ -347,7 +453,8 @@ func start_inferno(hx: float, hz: float, y: float) -> void:
 
 			var sm := _make_smoke(3.2)
 			sm.amount = 44
-			sm.amount_ratio = 1.0
+			sm.amount_ratio = _dense
+			_turbulence(sm, _quality == 0)
 			sm.lifetime = 5.5
 			sm.visibility_aabb = AABB(Vector3(-6, -0.5, -6), Vector3(12, 16, 12))
 			var spm := sm.process_material as ParticleProcessMaterial
@@ -363,7 +470,8 @@ func start_inferno(hx: float, hz: float, y: float) -> void:
 		l.light_energy = 1.6
 		l.omni_range = 12.0
 		l.omni_attenuation = 1.6
-		l.light_volumetric_fog_energy = 1.8
+		l.light_bake_mode = Light3D.BAKE_DISABLED
+		l.light_volumetric_fog_energy = 1.8 if _quality == 0 else 0.0
 		l.position = Vector3(
 			hx * (0.6 if i % 2 == 0 else -0.6),
 			1.7,
@@ -576,9 +684,19 @@ func _spark_mat() -> StandardMaterial3D:
 	return m
 
 
-func _smoke_mat() -> StandardMaterial3D:
+## Материал дыма один на все клубы: и переключений состояния меньше, и
+## качество настраивается разом. Дым — главный едок кадров, потому что
+## полупрозрачные клубы лежат друг на друге в несколько слоёв, и каждый
+## пиксель считается заново. Свет по вершинам вместо попиксельного и
+## отказ от теней на дыме дают самый крупный выигрыш во всей игре.
+static var _smoke_material: StandardMaterial3D = null
+
+
+static func _smoke_mat() -> StandardMaterial3D:
+	if _smoke_material != null:
+		return _smoke_material
 	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
 	m.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -589,9 +707,11 @@ func _smoke_mat() -> StandardMaterial3D:
 	m.particles_anim_loop = false
 	m.vertex_color_use_as_albedo = true
 	m.albedo_texture = Mats.puff_tex(256)
-	m.proximity_fade_enabled = true
+	m.disable_receive_shadows = true
+	m.proximity_fade_enabled = false
 	m.proximity_fade_distance = 0.7
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_smoke_material = m
 	return m
 
 

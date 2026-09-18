@@ -28,6 +28,7 @@ var _steps: Array[AudioStreamWAV] = []
 
 var _steam: AudioStreamPlayer3D
 var _whistle: AudioStreamPlayer3D
+var _press: AudioStreamPlayer3D     ## свист пара из-под закрытой заслонки
 
 var _rain: AudioStreamPlayer        ## шум дождя по двору
 var _roof: AudioStreamPlayer        ## стук капель по кровле — слышно только внутри
@@ -49,6 +50,8 @@ var _steam_want := 0.0
 var _steam_now := 0.0
 var _whistle_want := 0.0
 var _whistle_now := 0.0
+var _press_want := 0.0
+var _press_now := 0.0
 var _flare_cd := 0.0
 
 
@@ -72,6 +75,7 @@ func _ready() -> void:
 	_flue = _loop_player(_flue_stream(rng), 4.5, 26.0)
 	_steam = _loop_player(_steam_stream(rng), 1.6, 12.0)
 	_whistle = _loop_player(_whistle_stream(rng), 2.2, 24.0)
+	_press = _loop_player(_whistle_stream(rng), 3.4, 30.0)
 
 	_wind = AudioStreamPlayer.new()
 	_wind.stream = _wind_stream(rng)
@@ -115,6 +119,18 @@ func _process(delta: float) -> void:
 	_drive(_flue, _flue_now, 1.06, 0.88)
 	_drive(_steam, _steam_now * 0.55, 1.05, 0.95)
 	_drive(_whistle, _whistle_now * 0.4, 0.97, 1.03)
+	# давление в печи слышно раньше, чем видно: тон ползёт вверх вместе с ним
+	_press_now = lerpf(_press_now, _press_want, 1.0 - exp(-delta * 2.2))
+	if _press == null:
+		pass
+	elif _press_now < 0.01 or muted:
+		if _press.playing:
+			_press.stop()
+	else:
+		_press.pitch_scale = 0.55 + _press_now * 1.25
+		_press.volume_db = linear_to_db(clampf(_press_now * 0.5, 0.0, 1.0))
+		if not _press.playing:
+			_press.play()
 	_wind.volume_db = -80.0 if muted else linear_to_db(0.16)
 
 	_rain_now = lerpf(_rain_now, _rain_want, 1.0 - exp(-delta * 2.2))
@@ -202,6 +218,13 @@ func set_kettle(pos: Vector3, steam: float, whistle: float) -> void:
 		_steam.global_position = pos
 	if _whistle_want > 0.005:
 		_whistle.global_position = pos
+
+
+## Печь под давлением: тонкий свист из-под заслонки, который лезет всё выше.
+func set_pressure(pos: Vector3, x: float) -> void:
+	_press_want = clampf(x, 0.0, 1.0)
+	if _press_want > 0.005 and _press:
+		_press.global_position = pos
 
 
 func clack(pos: Vector3, vol := 1.0) -> void:

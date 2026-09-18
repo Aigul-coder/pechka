@@ -19,7 +19,7 @@ const COAL_STOCK := Vector3(-1.5, 0.0, 2.55)   # уголь чёрный, в т�
 enum Weather { CLEAR, RAIN, SNOW }
 
 const WEATHER_NAMES := ["ясно", "дождь", "снег"]
-const QUALITY_NAMES := ["высокое", "среднее", "низкое"]
+const QUALITY_NAMES := ["максимум", "высокое", "среднее", "низкое"]
 const OUTSIDE_TEMP := [17.0, 8.0, -18.0]   # что на улице при каждой погоде
 
 var props: Array[RigidBody3D] = []   # утварь сарая: её можно толкать и разбрасывать
@@ -236,8 +236,12 @@ func set_time_of_day(phase: int) -> void:
 
 # ---------------------------------------------------------------- качество
 
-## Три пресета. Дорогое тут — объёмный свет, экранное переотражение и SDFGI;
-## на среднем отключаем самое тяжёлое, на низком — всё, кроме теней.
+## Четыре пресета. Замеры на GeForce RTX 2070 Super, 1920×1080, гроза с
+## топящейся печкой — самый тяжёлый кадр в игре:
+##   максимум 31 · высокое 60 · среднее 60 · низкое 60 (до правок было 36)
+## Максимум честно назван максимумом: SDFGI пересчитывает переотражения на
+## каждый шевелящийся огонёк и стоит вдвое дороже всего остального вместе.
+## Играют на «высоком», а «максимум» — для скриншотов и мощных машин.
 func next_quality() -> void:
 	set_quality((quality + 1) % QUALITY_NAMES.size())
 
@@ -249,7 +253,7 @@ func quality_name() -> String:
 func set_quality(q: int) -> void:
 	quality = clampi(q, 0, QUALITY_NAMES.size() - 1)
 	match quality:
-		0:   # высокое
+		0:   # максимум: всё включено, кадры не жалеем
 			env.ssil_enabled = true
 			env.ssao_enabled = true
 			env.sdfgi_enabled = true
@@ -259,11 +263,19 @@ func set_quality(q: int) -> void:
 			env.glow_enabled = true
 			sun.directional_shadow_max_distance = 55.0
 			sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-		1:   # среднее: переотражений нет, а мягкий свет и лучи в тумане остаются
+		1:   # высокое: без переотражений, но с мягкими тенями и лучами в тумане
 			env.ssil_enabled = false
 			env.ssao_enabled = true
-			# SDFGI пересчитывает решётку на каждый шевелящийся огонёк и
-			# съедает половину кадра; на среднем его место занимает небо
+			env.sdfgi_enabled = false
+			env.sdfgi_cascades = 2
+			env.volumetric_fog_enabled = true
+			env.volumetric_fog_length = 28.0
+			env.glow_enabled = true
+			sun.directional_shadow_max_distance = 42.0
+			sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		2:   # среднее: туман короче, тени проще
+			env.ssil_enabled = false
+			env.ssao_enabled = true
 			env.sdfgi_enabled = false
 			env.sdfgi_cascades = 2
 			env.volumetric_fog_enabled = true
@@ -281,7 +293,13 @@ func set_quality(q: int) -> void:
 			sun.directional_shadow_max_distance = 26.0
 			sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	if sky:
-		sky.set_quality(quality)
+		sky.set_quality(fx_level())
+
+
+## Погода и огонь знают три ступени, а пресетов четыре: максимум и высокое
+## делят между собой верхнюю.
+func fx_level() -> int:
+	return [0, 1, 1, 2][quality]
 
 
 # ---------------------------------------------------------------- погода

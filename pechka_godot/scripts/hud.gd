@@ -27,11 +27,19 @@ var _slots: Array[Dictionary] = []
 var _intro: Control
 var _hint: Label
 var _chrome: Array[Control] = []   ## панели и прицел — их снимаем на скриншотах
+var _chrome_on := true
 var _award: Control
 var _award_title: Label
 var _award_sub: Label
 var _award_time := 0.0
 var _temp_grad: Gradient
+var _quest: Panel
+var _quest_step: Label
+var _quest_text: Label
+var _quest_hint: Label
+var _quest_key: Label
+var _quest_tick: Label
+var _quest_flash := 0.0
 
 
 func _ready() -> void:
@@ -71,6 +79,7 @@ func build(tool_names: Array, tool_keys: Array) -> void:
 	_build_gas()   # пелена лежит под панелями, иначе она закрасит цифры
 	_build_frost()
 	_build_panel_left()
+	_build_quest()
 	_build_toolbar(tool_names, tool_keys)
 	_build_hints()
 	_build_crosshair()
@@ -134,6 +143,68 @@ func _build_panel_left() -> void:
 	panel.add_child(_fps)
 
 
+## Панель обучения: один шаг за раз. Крупно — что делать, рядом — клавиша,
+## мелко — зачем это нужно. Больше на экране ничего не надо: длинный список
+## задач новичка пугает ровно так же, как стена текста.
+func _build_quest() -> void:
+	_quest = _panel(Vector2(28, 288), Vector2(330, 118))
+	add_child(_quest)
+	_chrome.append(_quest)
+
+	_quest_step = _label("", 13, Color(0.86, 0.66, 0.28), _font)
+	_quest_step.position = Vector2(18, 10)
+	_quest.add_child(_quest_step)
+
+	_quest_tick = _label("", 22, Color(0.45, 0.85, 0.42), _font_bold)
+	_quest_tick.position = Vector2(286, 8)
+	_quest.add_child(_quest_tick)
+
+	_quest_text = _label("", 20, CREAM, _font_bold)
+	_quest_text.position = Vector2(18, 32)
+	_quest_text.size = Vector2(296, 26)
+	_quest.add_child(_quest_text)
+
+	_quest_key = _label("", 15, HOT, _font_bold)
+	_quest_key.position = Vector2(18, 62)
+	_quest.add_child(_quest_key)
+
+	_quest_hint = _label("", 14, DIM, _font)
+	_quest_hint.position = Vector2(18, 86)
+	_quest_hint.size = Vector2(296, 20)
+	_quest_hint.clip_text = true
+	_quest.add_child(_quest_hint)
+	_quest.visible = false
+
+
+## Показать текущий шаг. Пустой словарь прячет панель — обучение кончилось.
+func set_quest(cur: Dictionary, index: int, total: int) -> void:
+	if _quest == null:
+		return
+	if cur.is_empty() or not _chrome_on:
+		_quest.visible = false
+		return
+	_quest.visible = true
+	_quest_step.text = "ОБУЧЕНИЕ · ШАГ %d ИЗ %d" % [index + 1, total]
+	_quest_text.text = str(cur.get("text", ""))
+	_quest_hint.text = str(cur.get("hint", ""))
+	var key := str(cur.get("key", ""))
+	_quest_key.text = ("клавиша %s, потом ЛКМ" % key) if key != "" else ""
+
+
+## Галочка и зелёная вспышка на закрытом шаге: маленькая награда за каждое
+## сделанное дело, без неё цепочка ощущается как список дел.
+func quest_done() -> void:
+	if _quest == null:
+		return
+	_quest_tick.text = "✓"
+	_quest_flash = 0.9
+
+
+func quest_hide() -> void:
+	if _quest:
+		_quest.visible = false
+
+
 func _build_toolbar(tool_names: Array, tool_keys: Array) -> void:
 	var count := tool_names.size()
 	var w := 89.0
@@ -177,12 +248,14 @@ func _build_hints() -> void:
 	var lines := [
 		"WASD — идти, Shift — бегом, пробел — прыжок",
 		"ЛКМ — работать инструментом, Tab — вид сверху",
-		"R — повернуть кирпич, B — перевязка, H — половинка",
+		"G — чертёж печки, R — повернуть кирпич",
+		"B — перевязка, H — половинка",
 		"Z — заслонка, N — время суток",
 		"P — погода, O — время года",
 		"X на предмете — убрать, C — сбросить всё",
 		"F5 / F9 — сохранить и загрузить постройку",
-		"M — звук, F1 — подсказки, F2 — полёт камеры",
+		"F3 — качество, F4 — обучение, F1 — этот список",
+		"M — звук, F2 — полёт камеры",
 	]
 	var panel := Panel.new()
 	panel.anchor_left = 1.0
@@ -261,38 +334,36 @@ func _build_intro() -> void:
 	card.anchor_right = 0.5
 	card.anchor_top = 0.5
 	card.anchor_bottom = 0.5
-	card.offset_left = -380
-	card.offset_right = 380
-	card.offset_top = -286
-	card.offset_bottom = 286
+	card.offset_left = -330
+	card.offset_right = 330
+	card.offset_top = -180
+	card.offset_bottom = 180
 	card.add_theme_stylebox_override("panel", _panel_style())
 	_intro.add_child(card)
 
-	var t := _label("ПЕЧКА", 46, CREAM, _font_bold)
-	t.position = Vector2(40, 30)
+	var t := _label("ПЕЧКА", 52, CREAM, _font_bold)
+	t.position = Vector2(40, 34)
 	card.add_child(t)
 
+	# Первый экран обязан помещаться в голову с одного взгляда. Всё
+	# остальное расскажет обучение по ходу дела, а полный список клавиш
+	# висит справа и прячется на F1.
 	var lines := [
-		"Ходишь по сараю ногами: WASD, Shift — бегом, пробел — прыжок.",
-		"Кладём кирпич на фундамент, цемент закрывает швы и держит трубу.",
-		"Внутренние простенки заставляют дым петлять — так тепло остаётся в кладке.",
-		"Заслонка душит огонь. Закроешь рано — угар, и тебя вынесет на воздух.",
-		"Сажа копится в трубе и однажды вспыхивает факелом: чисти кирочкой.",
-		"Рукой берёшь чайник, чугунок и ведро. Воду черпают из бочки.",
-		"Цель: протопить сарай до +20, когда за воротами мороз.",
+		"В сарае холодно. Растопи печь и согрейся.",
+		"Игра проведёт по шагам — просто делай, что написано слева.",
 		"",
-		"1 рука · 2 кирпич · 3 цемент · 4 опилки · 5 спичка · 6 труба",
-		"7 подпорка · 8 трава · 9 щепки · 0 уголь · - уровень · = кирочка",
-		"R повернуть · H половинка · B перевязка · Z заслонка · P погода",
-		"N время суток · F5/F9 сохранить-загрузить · F3 качество · Tab камера",
-		"",
-		"Нажми любую кнопку или щёлкни мышью, чтобы начать.",
+		"WASD — идти · мышь — смотреть · ЛКМ — работать",
+		"F1 — все клавиши · F3 — качество картинки",
 	]
 	for i in lines.size():
-		var l := _label(lines[i], 18, DIM if i != lines.size() - 1 else HOT, _font)
-		l.position = Vector2(40, 108 + i * 34)
-		l.size = Vector2(700, 26)
+		var l := _label(lines[i], 20, DIM, _font)
+		l.position = Vector2(40, 124 + i * 32)
+		l.size = Vector2(580, 26)
 		card.add_child(l)
+
+	var go := _label("Нажми любую кнопку", 22, HOT, _font_bold)
+	go.position = Vector2(40, 300)
+	card.add_child(go)
 
 
 # ---------------------------------------------------------------- обновление
@@ -306,7 +377,8 @@ func set_tool(idx: int) -> void:
 		(d["name"] as Label).add_theme_color_override("font_color", CREAM if active else DIM)
 
 
-func update_stats(temp: float, bricks: int, cemented: int, burning: int, rot: bool, bond: bool) -> void:
+func update_stats(temp: float, bricks: int, cemented: int, burning: int, rot: bool, bond: bool,
+		plan_left := -1, plan_total := 0) -> void:
 	_temp_label.text = "%d °C" % roundi(temp)
 	var t: float = clampf(temp / TEMP_MAX, 0.0, 1.0)
 	var c := _temp_grad.sample(t)
@@ -316,12 +388,23 @@ func update_stats(temp: float, bricks: int, cemented: int, burning: int, rot: bo
 	var bond_text := "перевязка" if bond else "в стык"
 	var rot_text := "поперёк" if rot else "вдоль"
 	_stats.text = "кирпичей %d · на цементе %d · горит %d · %s · %s" % [bricks, cemented, burning, rot_text, bond_text]
+	# когда чертёж включён, важнее всего — сколько кирпичей ещё не хватает
+	if plan_left >= 0:
+		_stats.text = "по чертежу сложено %d из %d · осталось %d" % [
+			plan_total - plan_left, plan_total, plan_left]
 
 
 ## Строка про воздух: какая тяга, в каком положении заслонка и не завалило ли
 ## сарай дымом. Дым в сарае подсвечиваем — это уже беда, а не статистика.
-func update_air(draught: float, damper: String, haze: float, dust: float) -> void:
+func update_air(draught: float, damper: String, haze: float, dust: float,
+		press: float = 0.0) -> void:
 	var bar := "тяга %d%% · заслонка %s" % [roundi(draught * 100.0), damper]
+	# давление главнее всего остального: если его проморгать, трубы не будет
+	if press > 0.02:
+		_air.text = "%s · ДАВЛЕНИЕ %d%%" % [bar, roundi(press * 100.0)]
+		_air.add_theme_color_override("font_color",
+			Color(1.0, 0.8, 0.3).lerp(Color(1.0, 0.18, 0.12), press))
+		return
 	if haze > 0.06:
 		bar += " · ДЫМ В САРАЕ"
 	# пыль опаснее дыма, поэтому её предупреждение и цвет главнее
@@ -465,6 +548,7 @@ func _build_gas() -> void:
 
 ## Убрать всю обвязку интерфейса: для красивых кадров нужен только мир.
 func chrome(on: bool) -> void:
+	_chrome_on = on
 	for c in _chrome:
 		c.visible = on
 
@@ -525,6 +609,12 @@ func _process(delta: float) -> void:
 			_toast.modulate.a = _toast_time / 0.6
 		if _toast_time <= 0.0:
 			_toast.modulate.a = 0.0
+	if _quest_flash > 0.0:
+		_quest_flash = maxf(0.0, _quest_flash - delta)
+		_quest.modulate = Color(1, 1, 1).lerp(Color(0.6, 1.0, 0.6), _quest_flash)
+		if _quest_flash <= 0.0:
+			_quest.modulate = Color(1, 1, 1)
+			_quest_tick.text = ""
 	if _award_time > 0.0:
 		_award_time -= delta
 		if _award_time < 1.2:

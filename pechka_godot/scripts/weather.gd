@@ -1286,6 +1286,14 @@ func _water(delta: float) -> void:
 			rainbow_out.emit()
 
 
+## Отладка скорости: убрать осадки, оставив всё остальное.
+func debug_off() -> void:
+	for p in _precip:
+		p.visible = false
+	if _splash:
+		_splash.visible = false
+
+
 ## Мерцание звёзд: шестьдесят точек хватает, чтобы небо перестало быть мёртвым.
 func _stars(delta: float) -> void:
 	_twinkle_t += delta
